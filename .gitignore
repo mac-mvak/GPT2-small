@@ -1,4 +1,10 @@
 files
 TinyStories_all_data.tar
 __pycache__
-
+pkls
+data
+tex.model
+tex.vocab
+checkpoints
+wandb
+test_data

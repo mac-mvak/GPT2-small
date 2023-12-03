@@ -1,18 +1,7 @@
 import torch
 import torch.nn as nn
-from dataclasses import dataclass
+from .config import ModelConfig
 
-
-@dataclass
-class ModelConfig:
-    embed_size: int = 1000
-    len_vocab: int = 1000
-    padding_idx: int = 3
-    max_len: int = 1024
-    init_s: float = 0.02
-    num_heads: int = 8
-    fc_size: int = 1024
-    n_blocks: int = 5
 
 def init_module(module, cfg: ModelConfig):
     for name, param in module.named_parameters():

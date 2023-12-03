@@ -2,28 +2,15 @@ from typing import Optional
 import torch
 from torch import Tensor
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+from src.dataset import CustomDataset, collate_fn
 import sentencepiece
-from model import ModelConfig, GPT2
+from src.model import GPT2
+from src.config import ModelConfig
 import json
+from src.logger import Writer
 from tqdm import tqdm
 
-
-class CustomDataset(Dataset):
-    def __init__(self, encoder, json_path):
-        super().__init__()
-        self.encoder = encoder
-        with open(json_path) as f:
-            self.texts = json.load(f)
-
-    def __len__(self):
-        return len(self.texts)
-    
-    def __getitem__(self, i):
-        text = self.texts[i]['story']
-        tokens = [self.encoder.bos_id()]
-        tokens += self.encoder.encode(text) + [self.encoder.eos_id()]
-        return {'tokens':  torch.LongTensor(tokens).unsqueeze(0)}
 
 class LossLM(nn.CrossEntropyLoss):
     def __init__(self, cfg: ModelConfig,
@@ -33,74 +20,71 @@ class LossLM(nn.CrossEntropyLoss):
         super().__init__(weight, size_average, ignore_index, reduce, reduction, label_smoothing)
 
     def forward(self, logits, tokens):
-        loss = super().forward(
-            logits.view(-1, logits.shape[-1]), tokens.view(-1)
-        )
+        a = logits[:, :-1, :].reshape(-1, logits.shape[-1])
+        b = tokens[:, 1:].reshape(-1)
+        loss = super().forward(a, b)
         return loss
 
 
-def adder(vec, v):
-    if vec is None:
-        vec = v
-    else:
-        size_1, size_2 = vec.shape[-1], v.shape[-1]
-        pad = size_1 - size_2
-        vec = nn.functional.pad(vec, (0, max(-pad, 0)), value=3)
-        v = nn.functional.pad(v, (0, max(pad, 0)), value=3)
-        vec = torch.cat([vec, v])
-    return vec
 
-def collate_fn(data):
-    tokens = None
-    for vec in data:
-        tokens = adder(tokens, vec['tokens'])
-    return tokens
-
-
-def train_epoch(model, optimizer, loss, dataloader, device):
+def train_epoch(model, optimizer, criterion, scaler, writer, dataloader, device):
     f_loss = 0
-    for batch in dataloader:
+    for batch in tqdm(dataloader):
         batch = batch.to(device)
         tokens = batch
-        logits = model(batch)
-        loss = loss(logits, tokens)
-        loss.backward()
-        optimizer.step()
-        f_loss += loss.detach().cpu().item()
-    return f_loss
+        with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
+            logits = model(batch)
+            loss = criterion(logits, tokens)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        writer.log({"loss": loss.detach().cpu().item()})
+        break
 
 
-def trainer(num_epochs, model, optimiser, loss, dataloader, device='cpu'):
+def trainer(num_epochs, model, optimiser, loss, scaler, writer, dataloader, model_cfg={}, device='cpu'):
     train_losses = []
     model = model.to(device)
     for i in range(num_epochs):
-        train_loss = train_epoch(model, optimiser, loss, dataloader, device)
-        train_losses.append(train_loss)
-        print(i, train_loss)
+        train_epoch(model, optimiser, loss,
+                                  scaler, writer, dataloader, device)
+        checkpoint = {
+            'config': model_cfg,
+            'state_dict': model.state_dict()
+        }
+        torch.save(checkpoint, f'checkpoints/checkpoint_{i}.pth')
+        
     return train_losses
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 
 
+with open('cfgs/cfg.json') as f:
+    cfg = json.load(f)
 
-encoder = sentencepiece.SentencePieceProcessor(model_file='m.model')
+model_cfg = ModelConfig(**cfg['ModelConfig'])
 
-dataset = CustomDataset(encoder, 'dataset.json')
+dataset = CustomDataset(**cfg['DatasetConfig'])
 
-dataloader = DataLoader(dataset, batch_size=len(dataset), collate_fn=collate_fn)
+dataloader = DataLoader(dataset, batch_size=15, collate_fn=collate_fn, num_workers=1)
+scaler = torch.cuda.amp.GradScaler(enabled=True)
 
-cfg = ModelConfig()
-
-model = GPT2(cfg)
+model = GPT2(model_cfg)
+aaa = count_parameters(model)
+print(aaa)
 
 device = torch.device('cuda:0')
 
-loss = LossLM(cfg)
+loss = LossLM(model_cfg)
 
 optimiser = torch.optim.Adam(model.parameters(), lr=3e-4)
+writer = Writer(project='GPT2', name='first', cfg = cfg)
 
-losses = trainer(5000, model, optimiser, loss, dataloader, device)
+losses = trainer(1, model, optimiser, 
+                 loss, scaler, writer, dataloader, device=device, model_cfg=model_cfg)
 
 print(losses[:5])
 print(losses[-5:])
