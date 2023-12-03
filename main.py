@@ -27,9 +27,10 @@ class LossLM(nn.CrossEntropyLoss):
 
 
 
-def train_epoch(model, optimizer, criterion, scaler, writer, dataloader, device):
+def train_epoch(model, optimizer, scheduler, criterion, scaler, writer, dataloader, device):
     f_loss = 0
     for batch in tqdm(dataloader):
+        optimizer.zero_grad()
         batch = batch.to(device)
         tokens = batch
         with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
@@ -38,15 +39,17 @@ def train_epoch(model, optimizer, criterion, scaler, writer, dataloader, device)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        writer.log({"loss": loss.detach().cpu().item()})
-        break
+        scheduler.step()
+        writer.log({"loss": loss.detach().cpu().item(), 'lr': scheduler.get_last_lr()})
 
 
-def trainer(num_epochs, model, optimiser, loss, scaler, writer, dataloader, model_cfg={}, device='cpu'):
+
+def trainer(num_epochs, model, optimizer, scheduler,
+             loss, scaler, writer, dataloader, model_cfg={}, device='cpu'):
     train_losses = []
     model = model.to(device)
     for i in range(num_epochs):
-        train_epoch(model, optimiser, loss,
+        train_epoch(model, optimizer, loss,
                                   scaler, writer, dataloader, device)
         checkpoint = {
             'config': model_cfg,
@@ -69,21 +72,27 @@ model_cfg = ModelConfig(**cfg['ModelConfig'])
 
 dataset = CustomDataset(**cfg['DatasetConfig'])
 
-dataloader = DataLoader(dataset, batch_size=15, collate_fn=collate_fn, num_workers=1)
+dataloader = DataLoader(dataset, batch_size=512, collate_fn=collate_fn, num_workers=5, 
+                        shuffle=True, drop_last=True)
+print(len(dataloader))
 scaler = torch.cuda.amp.GradScaler(enabled=True)
 
 model = GPT2(model_cfg)
 aaa = count_parameters(model)
 print(aaa)
-
+epochs=10
 device = torch.device('cuda:0')
 
 loss = LossLM(model_cfg)
 
-optimiser = torch.optim.Adam(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
+
+scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=1e-3, 
+                                                epochs=epochs, steps_per_epoch=9570)
+
 writer = Writer(project='GPT2', name='first', cfg = cfg)
 
-losses = trainer(1, model, optimiser, 
+losses = trainer(epochs, model, optimizer, scheduler, 
                  loss, scaler, writer, dataloader, device=device, model_cfg=model_cfg)
 
 print(losses[:5])

@@ -15,11 +15,9 @@ class CustomDataset(Dataset):
         super().__init__()
         self.texts = torch.load(dataset_path)
         self.starts = torch.load(starts_path)
-        u = self.starts.shape[0]
         self.max_tok = max_tok
         self.bos = torch.LongTensor([1])
         self.eos = torch.LongTensor([2])
-        print(u)
 
     def __len__(self):
         return self.starts.shape[0]
