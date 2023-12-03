@@ -1,8 +1,10 @@
+from typing import Optional
 import torch
+from torch import Tensor
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import sentencepiece
-from model import ModelConfig, FinalModel
+from model import ModelConfig, GPT2
 import json
 from tqdm import tqdm
 
@@ -23,6 +25,20 @@ class CustomDataset(Dataset):
         tokens += self.encoder.encode(text) + [self.encoder.eos_id()]
         return {'tokens':  torch.LongTensor(tokens).unsqueeze(0)}
 
+class LossLM(nn.CrossEntropyLoss):
+    def __init__(self, cfg: ModelConfig,
+                  weight: Tensor | None = None, size_average=None, ignore_index: int = -100,
+                  reduce=None, reduction: str = 'mean', label_smoothing: float = 0.1) -> None:
+        ignore_index = cfg.padding_idx
+        super().__init__(weight, size_average, ignore_index, reduce, reduction, label_smoothing)
+
+    def forward(self, logits, tokens):
+        loss = super().forward(
+            logits.view(-1, logits.shape[-1]), tokens.view(-1)
+        )
+        return loss
+
+
 def adder(vec, v):
     if vec is None:
         vec = v
@@ -40,32 +56,25 @@ def collate_fn(data):
         tokens = adder(tokens, vec['tokens'])
     return tokens
 
-def loss_lm(logits, tokens):
-    # Measure next token loss
-    # Logits have shape [batch, position, d_vocab]
-    # Tokens have shape [batch, position]
-    log_probs = logits.log_softmax(dim=-1)
-    pred_log_probs = log_probs[:, :-1].gather(dim=-1, index=tokens[:, 1:].unsqueeze(-1)).squeeze(-1)
-    return -pred_log_probs.mean()
 
-def train_epoch(model, optimizer, dataloader, device):
+def train_epoch(model, optimizer, loss, dataloader, device):
     f_loss = 0
     for batch in dataloader:
         batch = batch.to(device)
         tokens = batch
         logits = model(batch)
-        loss = loss_lm(logits, tokens)
+        loss = loss(logits, tokens)
         loss.backward()
         optimizer.step()
         f_loss += loss.detach().cpu().item()
     return f_loss
 
 
-def trainer(num_epochs, model, optimiser, dataloader, device='cpu'):
+def trainer(num_epochs, model, optimiser, loss, dataloader, device='cpu'):
     train_losses = []
     model = model.to(device)
     for i in range(num_epochs):
-        train_loss = train_epoch(model, optimiser, dataloader, device)
+        train_loss = train_epoch(model, optimiser, loss, dataloader, device)
         train_losses.append(train_loss)
         print(i, train_loss)
     return train_losses
@@ -83,13 +92,15 @@ dataloader = DataLoader(dataset, batch_size=len(dataset), collate_fn=collate_fn)
 
 cfg = ModelConfig()
 
-model = FinalModel(cfg)
+model = GPT2(cfg)
 
 device = torch.device('cuda:0')
 
-optimiser = torch.optim.Adam(model.parameters(), lr=3e-5)
+loss = LossLM(cfg)
 
-losses = trainer(5000, model, optimiser, dataloader, device)
+optimiser = torch.optim.Adam(model.parameters(), lr=3e-4)
+
+losses = trainer(5000, model, optimiser, loss, dataloader, device)
 
 print(losses[:5])
 print(losses[-5:])
