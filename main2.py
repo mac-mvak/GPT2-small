@@ -75,28 +75,38 @@ model_cfg = ModelConfig(**cfg['ModelConfig'])
 
 dataset = CustomDataset(**cfg['DatasetConfig'])
 
-dataloader = DataLoader(dataset, batch_size=650, collate_fn=collate_fn, num_workers=8, 
+dataloader = DataLoader(dataset, batch_size=20, collate_fn=collate_fn, num_workers=8, 
                         shuffle=True, drop_last=True)
 print(len(dataloader))
+device = torch.device('cuda:0')
+
 scaler = torch.cuda.amp.GradScaler(enabled=True)
 
-model = GPT2(model_cfg)
+checkpoint = torch.load('checkpoints/checkpoint_0.pth')
+
+model = GPT2(checkpoint['config']).to(device)
+model.load_state_dict(checkpoint['state_dict'])
+aaa = count_parameters(model)
+
 aaa = count_parameters(model)
 print(aaa)
 epochs=4
-device = torch.device('cuda:0')
 
-loss = LossLM(model_cfg, label_smoothing=0.05)
+criterion = LossLM(model_cfg, label_smoothing=0)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
+model.eval()
 
-scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=1e-3, 
-                                                epochs=epochs, steps_per_epoch=7538, 
-                                                anneal_strategy="cos", pct_start=0.2)
+sum_loss = 0.
+ks = 0
+i = 0
 
-cfg['n_params'] = aaa
-
-writer = Writer(project='GPT2', name='normal_run GPT2', cfg = cfg)
-
-trainer(epochs, model, optimizer, scheduler, 
-                 loss, scaler, writer, dataloader, device=device, model_cfg=model_cfg)
+for data in tqdm(dataloader):
+    data = data.to(device)
+    logits = model(data)
+    loss = criterion(logits, data)
+    sum_loss +=  20* loss.cpu().item()
+    ks += 20
+    i += 1
+    if i > 6000:
+        break
+print(sum_loss/ks)

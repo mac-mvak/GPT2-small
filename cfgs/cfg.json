@@ -1,13 +1,13 @@
 {
     "ModelConfig": {
-    "embed_size": 768,
+    "embed_size": 600,
     "len_vocab":5000,
     "padding_idx" : 3,
     "max_len" : 514,
     "init_s" : 0.02,
     "num_heads" : 8,
-    "fc_size" : 768,
-    "n_blocks" : 6
+    "fc_size" : 600,
+    "n_blocks" : 5
     },
     "DatasetConfig": {
         "max_tok": 512,
@@ -15,3 +15,4 @@
         "starts_path": "data/starts.pt"
     }
 }
+

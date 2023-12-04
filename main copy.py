@@ -29,19 +29,19 @@ class LossLM(nn.CrossEntropyLoss):
 
 def train_epoch(model, optimizer, scheduler, criterion, scaler, writer, dataloader, device):
     f_loss = 0
-    for batch in tqdm(dataloader):
+    for batch in dataloader:
         optimizer.zero_grad()
         batch = batch.to(device)
         tokens = batch
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+        with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=True):
             logits = model(batch)
             loss = criterion(logits, tokens)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
-        lr = scheduler.get_last_lr()[0]
-        writer.log({"loss": loss.detach().cpu().item(), 'lr': lr,})
+        u = scheduler.get_last_lr()[0]
+        writer.log({"loss": loss.detach().cpu().item(), 'lr': u})
 
 
 
@@ -49,14 +49,14 @@ def trainer(num_epochs, model, optimizer, scheduler,
              loss, scaler, writer, dataloader, model_cfg={}, device='cpu'):
     train_losses = []
     model = model.to(device)
-    for i in range(num_epochs):
+    for i in tqdm(range(num_epochs)):
         train_epoch(model, optimizer, scheduler, loss,
                                   scaler, writer, dataloader, device)
         checkpoint = {
             'config': model_cfg,
             'state_dict': model.state_dict()
         }
-        torch.save(checkpoint, f'checkpoints/checkpoint_{i}.pth')
+        #torch.save(checkpoint, f'checkpoints/checkpoint_{i}.pth')
         
     return train_losses
 
@@ -64,8 +64,6 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-torch.backends.cudnn.deterministic = False
-torch.cuda.empty_cache()
 
 
 with open('cfgs/cfg.json') as f:
@@ -75,28 +73,23 @@ model_cfg = ModelConfig(**cfg['ModelConfig'])
 
 dataset = CustomDataset(**cfg['DatasetConfig'])
 
-dataloader = DataLoader(dataset, batch_size=650, collate_fn=collate_fn, num_workers=8, 
+dataloader = DataLoader(dataset, batch_size=20, collate_fn=collate_fn, num_workers=5, 
                         shuffle=True, drop_last=True)
 print(len(dataloader))
 scaler = torch.cuda.amp.GradScaler(enabled=True)
 
-model = GPT2(model_cfg)
+checkpoint = torch.load('checkpoints/checkpoint.pth')
+
+model = GPT2(checkpoint['config'])
+model.load_state_dict(checkpoint['state_dict'])
 aaa = count_parameters(model)
-print(aaa)
-epochs=4
-device = torch.device('cuda:0')
 
-loss = LossLM(model_cfg, label_smoothing=0.05)
+u = dataset[2]['tokens']
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
+model.eval()
+ans_u = model(u)
+ans_u = ans_u.squeeze()
+u = u.squeeze()
+armax = torch.argmax(ans_u, dim=-1)
+print(u[1:]==armax[:-1])
 
-scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=1e-3, 
-                                                epochs=epochs, steps_per_epoch=7538, 
-                                                anneal_strategy="cos", pct_start=0.2)
-
-cfg['n_params'] = aaa
-
-writer = Writer(project='GPT2', name='normal_run GPT2', cfg = cfg)
-
-trainer(epochs, model, optimizer, scheduler, 
-                 loss, scaler, writer, dataloader, device=device, model_cfg=model_cfg)
