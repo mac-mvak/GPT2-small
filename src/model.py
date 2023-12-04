@@ -73,6 +73,35 @@ class GPT2(nn.Module):
         logits = self.fc_final(norm_blocks_out)
         return logits
 
+    @torch.no_grad()
+    def inference(self, encoder, text_prefix="", temperature=1.0, max_len = 300):
+        self.eval()
+        device = torch.device('cuda:0') if torch.cuda.is_available() else 'cpu'
+        tokens = encoder.encode(text_prefix)
+        tokens = [1] + tokens
+        tokens = torch.LongTensor(tokens).to(device)
+        new_token = -1
+        while tokens.shape[0] < max_len:
+            if new_token == 2 or new_token == 3:
+                break
+            logits = self.forward(tokens.unsqueeze(0)).squeeze(0)
+            logits /= temperature
+            
+            new_token = torch.distributions.Categorical(logits=logits[-1, :]).sample()
+            tokens = torch.cat([tokens, new_token.reshape(1)])
+            new_token = new_token.item()
+        
+        tokens = tokens[1:]
+
+        if tokens[-1] == 2:
+            tokens = tokens[:-1]
+
+        text = encoder.decode(tokens.tolist())
+        return text
+
+        
+        
+
 
 
 
